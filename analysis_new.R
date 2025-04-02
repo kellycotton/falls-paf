@@ -116,24 +116,45 @@ length(included_pts2) - length(included_pts)
 length(included_pts)
 
 # Create cuts for cognition, gait, and grip strength based on pts that will be included
-cog_cuts <- data_cat %>% 
-  filter(id %in% included_pts) %>% 
-  summarise(mean_cog = mean(tot_cog, na.rm = T), sd_cog = sd(tot_cog, na.rm = T), 
-            cog_imp = mean_cog - sd_cog) 
 
-gait_cuts <- data_cat %>%
-  filter(id %in% included_pts) %>%
-  group_by(gender, age_group) %>%
-  summarise(mean_gait = mean(gait_speed_conv, na.rm = T), sd_gait = sd(gait_speed_conv, na.rm = T),
-            slow_gait_cut = mean_gait - sd_gait)
+data_inc <- data_cat %>% 
+  mutate(
+    # new variable if pt should be excluded 
+    included = case_when(
+      id %in% included_pts ~ 1,
+      !id %in% included_pts ~ 0
+    )
+  )
 
-gait_cuts
+# Create survey design
+design_cuts <- svydesign(id =~ id, weights =~ mwgtr, data = data_inc)
 
-grip_cuts <- data_cat %>% 
-  filter(id %in% included_pts) %>% 
-  group_by(gender, age_group) %>% 
-  summarise(mean_grip = mean(grip_strength, na.rm = T), sd_grip = sd(grip_strength, na.rm = T), 
-            weak_grip_cut = mean_grip - sd_grip)
+# Subset based on exclusion criteria
+data_sub_cuts <- subset(design_cuts, included == 1)
+  
+cog_cuts_mean <- svymean(~ tot_cog, data_sub_cuts)[1]
+cog_cuts_sd <- sqrt(svyvar(~ tot_cog, data_sub_cuts)[1])
+cog_cuts <- cog_cuts_mean - cog_cuts_sd
+
+gait_cuts_mean <- svyby(~gait_speed_conv, ~age_group*gender, data_sub_cuts, svymean) %>% 
+  rename(mean_gait = gait_speed_conv)
+gait_cuts_sd <- svyby(~gait_speed_conv, ~age_group*gender, data_sub_cuts, svyvar) %>% 
+  mutate(sd_gait= sqrt(gait_speed_conv))
+
+gait_cuts <- gait_cuts_mean %>% 
+  left_join(., gait_cuts_sd, by = c("age_group", "gender")) %>% 
+  select(age_group, gender, mean_gait, sd_gait) %>% 
+  mutate(slow_gait_cut = mean_gait - sd_gait)
+
+grip_cuts_mean <- svyby(~grip_strength, ~age_group*gender, data_sub_cuts, svymean) %>% 
+  rename(mean_grip = grip_strength)
+grip_cuts_sd <- svyby(~grip_strength, ~age_group*gender, data_sub_cuts, svyvar) %>% 
+  mutate(sd_grip = sqrt(grip_strength))
+
+grip_cuts <- grip_cuts_mean %>% 
+  left_join(., grip_cuts_sd, by = c("age_group", "gender")) %>% 
+  select(age_group, gender, mean_grip, sd_grip) %>% 
+  mutate(weak_grip_cut = mean_grip - sd_grip)
 
 # Clean up data
 data_clean <- data_cat %>%
@@ -161,8 +182,8 @@ data_clean <- data_cat %>%
   left_join(., gait_cuts, by = c("age_group", "gender")) %>% 
   left_join(., grip_cuts, by = c("age_group", "gender")) %>% 
   mutate(cog_imp = case_when(
-    tot_cog <= cog_cuts$cog_imp ~ 1,
-    tot_cog > cog_cuts$cog_imp ~ 0,
+    tot_cog <= cog_cuts ~ 1,
+    tot_cog > cog_cuts ~ 0,
     TRUE ~ tot_cog
   ),
   slow_gait = case_when(
