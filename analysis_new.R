@@ -8,7 +8,8 @@ library(survey)
 library(graphPAF)
 
 # Read data
-data_cat <- read_csv(here::here("data", "output_data", "falls_hrs_cat.csv"))
+data_cat <- read_csv(here::here("data", "output_data", "falls_hrs_cat.csv")) %>% 
+  select(-schlyrs, -pain_meds)
 
 # Look at data
 skimr::skim(data_cat %>% 
@@ -159,7 +160,7 @@ grip_cuts <- grip_cuts_mean %>%
 # Clean up data
 data_clean <- data_cat %>%
   # only relevant columns
-  select(id, mwgtr, age, age_group, gender, schlyrs, 
+  select(id, mwgtr, age, age_group, gender, #schlyrs, 
          incident_fall,
          incident_fall_number, 
          incident_fall_injury,
@@ -175,7 +176,7 @@ data_clean <- data_cat %>%
          pain,
          subj_balance,
          inactive_mod,
-         pain_meds,
+         # pain_meds,
          tot_cog, gait_speed_conv, grip_strength, 
   ) %>% 
   # add cognition, gait, and grip cuts to main df
@@ -220,7 +221,7 @@ data_clean_factor <- data_clean %>%
       weak_strength,
       subj_balance,
       inactive_mod,
-      pain_meds,
+      # pain_meds,
     ), 
     factor)
   ) %>% 
@@ -259,11 +260,36 @@ tbl_unwt <- tbl_summary(
   data = data_no_excl %>% mutate(across(where(is.factor), ~ recode(.x, "0" = "No", "1" = "Yes"))),
   by = incident_fall, 
   include = c(-id, -mwgtr, -age_group, -slow_gait_cut, -mean_gait, 
+              -incident_fall_number,
               -sd_gait, -mean_grip, -sd_grip, -weak_grip_cut, -included),
   statistic = list(all_continuous() ~ "{mean} ({sd})",
                    all_categorical() ~ "{n} ({p}%)"
                    ),
-  digits = all_continuous() ~ 1
+  digits = all_continuous() ~ 1,
+  label = list(
+    age = "Age, years, Mean (SD)",
+    gender = "Women, %", 
+    incident_fall_injury = "Injurious incident fall, %",
+    multi_falls = "Mulitiple incident falls, %",
+    cog_tot = "A-TICS, range 0-35, Mean (SD)",
+    gait_speed_conv = "Gait velocity, m/s, Mean (SD)",
+    grip_strength = "Grip strength, kg, Mean (SD)",
+    fall_past_two = "Previous fall history",
+    highbp = "Hypertension",
+    diabetes = "Diabetes",
+    heart = "Heart condition",
+    stroke = "Stroke",
+    arthritis = "Arthritis",
+    depression = "Depression",
+    cog_imp = "Cognitive impairment",
+    slow_gait = "Slow gait",
+    weak_strength = "Muscle weakness",
+    low_vision = "Poor vision",
+    poor_hearing = "Poor hearing",
+    pain = "Pain",
+    subj_balance = "Subjective poor balance",
+    inactive_mod = "Physical inactivity"
+  )
   ) %>% 
   add_overall() %>% 
   add_p(test = list(all_continuous() ~ "t.test")) %>% 
@@ -305,6 +331,30 @@ tbl_wt <- tbl_svysummary(
   digits = list(
                 all_continuous() ~ 1,
                 gait_speed_conv ~ 3
+  ),
+  label = list(
+    age = "Age, years, Mean (SD)",
+    gender = "Women, %", 
+    incident_fall_injury = "Injurious incident fall, %",
+    multi_falls = "Mulitiple incident falls, %",
+    cog_tot = "A-TICS, range 0-35, Mean (SD)",
+    gait_speed_conv = "Gait velocity, m/s, Mean (SD)",
+    grip_strength = "Grip strength, kg, Mean (SD)",
+    fall_past_two = "Previous fall history",
+    highbp = "Hypertension",
+    diabetes = "Diabetes",
+    heart = "Heart condition",
+    stroke = "Stroke",
+    arthritis = "Arthritis",
+    depression = "Depression",
+    cog_imp = "Cognitive impairment",
+    slow_gait = "Slow gait",
+    weak_strength = "Muscle weakness",
+    low_vision = "Poor vision",
+    poor_hearing = "Poor hearing",
+    pain = "Pain",
+    subj_balance = "Subjective poor balance",
+    inactive_mod = "Physical inactivity"
   )
 ) %>% 
   add_overall() %>% 
@@ -318,11 +368,14 @@ tbl_wt
 # tbl_wt %>%
   # as_hux_xlsx( here::here("data", "output_data", "demo_table_weighted.xlsx"))
 
+# Correlations ----
 # Correlations between risk factors
 design2 <- svydesign(id =~ id, weights =~ mwgtr, data = data_clean %>% 
                        select(id, mwgtr, included, fall_past_two, low_vision, poor_hearing, diabetes, highbp, 
                               heart, stroke, arthritis, depression, pain, subj_balance, 
-                              inactive_mod, pain_meds, cog_imp, slow_gait, weak_strength) %>% 
+                              inactive_mod, 
+                              # pain_meds, 
+                              cog_imp, slow_gait, weak_strength) %>% 
                        mutate_if(is.factor, as.numeric)
                      )
 
@@ -333,7 +386,9 @@ data_cor <- as.matrix(data_clean %>%
                         filter(included == 1) %>% 
                         select(fall_past_two, low_vision, poor_hearing, diabetes, highbp, 
                                heart, stroke, arthritis, depression, pain, subj_balance, 
-                               inactive_mod, pain_meds, cog_imp, slow_gait, weak_strength) %>% 
+                               inactive_mod, 
+                               # pain_meds, 
+                               cog_imp, slow_gait, weak_strength) %>% 
                         mutate_if(is.factor, as.numeric)
 ) 
 v <- svyvar(data_cor, data_sub2)
@@ -354,9 +409,9 @@ corrplot::corrplot(cov2cor(as.matrix(v)),
 
 # Full sample (of those who did gait assessment)
 m_full_incident <- svyglm(incident_fall ~ 
-                            fall_past_two +
+                            gender*fall_past_two +
                             low_vision + 
-                            poor_hearing +
+                            gender*poor_hearing +
                             diabetes + 
                             highbp + 
                             heart +
@@ -366,20 +421,20 @@ m_full_incident <- svyglm(incident_fall ~
                             pain +
                             subj_balance +
                             inactive_mod +
-                            pain_meds +
                             cog_imp +
-                            slow_gait +
-                            weak_strength +
-                            age + gender + schlyrs
+                            gender*slow_gait +
+                            weak_strength 
+                             + age + gender 
+                          # + schlyrs
                           , 
-                          family = poisson(),
+                          family = quasipoisson(),
                           design = data_sub)
 
 tbl_results_1 <- tbl_regression(
   m_full_incident,
   exponentiate = T,
   conf.int = T,
-  estimate_fun = function(x) style_number(x, digits = 3),
+  estimate_fun = function(x) style_number(x, digits = 2),
   show_single_row = everything() # can comment out to see full model, easier to read with only 1 row
 ) %>% 
   add_significance_stars() %>% 
@@ -398,7 +453,7 @@ data_sub_no_hx <- subset(design, included == 1 & fall_past_two == 0) # correct?
 # Only those without prior fall history
 m_nofallhx_incident <- svyglm(incident_fall ~ 
                                 low_vision + 
-                                poor_hearing +
+                                gender*poor_hearing +
                                 diabetes + 
                                 highbp + 
                                 heart +
@@ -408,20 +463,21 @@ m_nofallhx_incident <- svyglm(incident_fall ~
                                 pain +
                                 subj_balance +
                                 inactive_mod +
-                                pain_meds +
+                                # pain_meds +
                                 cog_imp +
                                 slow_gait +
                                 weak_strength +
-                                age + gender + schlyrs
+                                age + gender 
+                              # + schlyrs
                               , 
-                              family = poisson(),
+                              family = quasipoisson(),
                               design = data_sub_no_hx)
 
 tbl_results_2 <- tbl_regression(
   m_nofallhx_incident,
   exponentiate = T,
   conf.int = T,
-  estimate_fun = function(x) style_number(x, digits = 3),
+  estimate_fun = function(x) style_number(x, digits = 2),
   show_single_row = everything()
 ) %>% 
   add_significance_stars() %>% 
@@ -452,20 +508,21 @@ m_fallinj <- svyglm(incident_fall_injury ~
                                 pain +
                                 subj_balance +
                                 inactive_mod +
-                                pain_meds +
+                                # pain_meds +
                                 cog_imp +
                                 slow_gait +
                                 weak_strength +
-                                age + gender + schlyrs
+                                age + gender 
+                    # + schlyrs
                               , 
-                              family = poisson(),
+                              family = quasipoisson(),
                               design = data_sub_inj)
 
 tbl_results_3 <- tbl_regression(
   m_fallinj,
   exponentiate = T,
   conf.int = T,
-  estimate_fun = function(x) style_number(x, digits = 3),
+  estimate_fun = function(x) style_number(x, digits = 2),
   show_single_row = everything()
 ) %>% 
   add_significance_stars() %>% 
@@ -476,12 +533,176 @@ tbl_results_3
 
 # export to Excel
 # tbl_results_2 %>%
-# as_hux_xlsx( here::here("data", "output_data", "tbl_results_2.xlsx"))
-
-# Possible additional models = injurious falls
+# as_hux_xlsx( here::here("data", "output_data", "tbl_results_3.xlsx"))
 
 # PAF calculation ----
+##### Miettinen's formula ----
+#function to calculate PAF
+get_miettinen_paf <- function(prev,arr){
+  return(round(prev*(arr-1)/arr,4))
+}
 
+get_paf_ci = function(prev_ci_lower,
+                      prev_ci_upper,
+                      arr_ci_lower,
+                      arr_ci_upper){
+  paf_ci_lower = round(prev_ci_lower*(arr_ci_lower - 1)/arr_ci_lower,4)
+  paf_ci_upper = round(prev_ci_upper*(arr_ci_upper - 1)/arr_ci_upper,4)
+  
+  return(paste("(", as.character(paf_ci_lower),",",as.character(paf_ci_upper),")"))
+}
+
+
+#get adjusted relative risk
+
+## m1 ----
+arr_tb = broom::tidy(m_full_incident,exponentiate = TRUE) %>% 
+  dplyr::select(term,estimate) %>% 
+  filter(!(term %in% c("age","genderMale","(Intercept)", 
+                       "genderMale:fall_past_two1", "genderMale:poor_hearing1", "genderMale:slow_gait1"))) %>% 
+  mutate(term = str_replace_all(term,"[01]",""))
+
+#97.5 percent CIs for RR
+arr_ci_tb = broom::tidy(m_full_incident) %>% 
+  dplyr::select(term,estimate,std.error) %>% 
+  filter(!(term %in% c("age","genderMale","(Intercept)"))) %>% 
+  mutate(term = str_replace_all(term,"[01]","")) %>% 
+  mutate(arr_ci_lower = exp(estimate - 2.24*std.error),
+         arr_ci_upper = exp(estimate + 2.24*std.error)) %>% 
+  dplyr::select(term,arr_ci_lower,arr_ci_upper)
+
+arr_tb = arr_tb %>% 
+  left_join(arr_ci_tb,
+            by = "term")
+
+fct_lst = arr_tb$term
+
+#get prevalence of the modifiable risk factor among those who fell
+
+
+#new design: only contain eligible subjects who fell
+data_sub_fall <- subset(design, included == 1&incident_fall==1)
+
+
+prev_tb = tibble()
+po = list()
+
+for (i in seq(length(fct_lst))){
+  if (fct_lst[i] %in% c("diabetes","cog_imp","slow_gait","weak_strength")){
+    po[i] = "0"
+  }
+  else{
+    po[i] = "1"
+  }
+}
+
+for (i in seq(length(fct_lst))){
+  prev = as_tibble(svymean( ~eval(as.name(fct_lst[i])), data_sub_fall),
+                   rownames = "level") %>% 
+    filter(str_detect(level,as.character(po[i]))) %>% 
+    pull(mean)
+  
+  prev_se = as_tibble(svymean( ~eval(as.name(fct_lst[i])), data_sub_fall),
+                      rownames = "level") %>% 
+    filter(str_detect(level,as.character(po[i]))) %>% 
+    pull(SE)
+  
+  prev_tb = prev_tb %>% 
+    bind_rows(tibble(term=fct_lst[i],
+                     prev=prev,
+                     prev_se = prev_se,
+                     prev_ci_lower = prev - 2.24*prev_se,
+                     prev_ci_upper = prev + 2.24*prev_se))
+}
+
+
+prev_arr_tb = prev_tb %>% 
+  left_join(arr_tb, by = "term") %>% 
+  rename(arr = estimate) %>% 
+  mutate(miettinen_paf = get_miettinen_paf(prev,arr),
+         miettinen_paf_ci = get_paf_ci(prev_ci_lower,
+                                       prev_ci_upper,
+                                       arr_ci_lower,
+                                       arr_ci_upper))
+
+
+write_csv(prev_arr_tb,here::here("data", "output_data", "miettinen_paf_results_m1.csv"))
+
+## m2 ----
+arr_tb = broom::tidy(m_nofallhx_incident,exponentiate = TRUE) %>% 
+  dplyr::select(term,estimate) %>% 
+  filter(!(term %in% c("age","genderMale","(Intercept)", 
+                       "genderMale:poor_hearing1"))) %>% 
+  mutate(term = str_replace_all(term,"[01]",""))
+
+#97.5 percent CIs for RR
+arr_ci_tb = broom::tidy(m_nofallhx_incident) %>% 
+  dplyr::select(term,estimate,std.error) %>% 
+  filter(!(term %in% c("age","genderMale","(Intercept)"))) %>% 
+  mutate(term = str_replace_all(term,"[01]","")) %>% 
+  mutate(arr_ci_lower = exp(estimate - 2.24*std.error),
+         arr_ci_upper = exp(estimate + 2.24*std.error)) %>% 
+  dplyr::select(term,arr_ci_lower,arr_ci_upper)
+
+arr_tb = arr_tb %>% 
+  left_join(arr_ci_tb,
+            by = "term")
+
+fct_lst = arr_tb$term
+
+#get prevalence of the modifiable risk factor among those who fell
+
+
+#new design: only contain eligible subjects who fell
+data_sub_fall <- subset(design, included == 1&incident_fall==1)
+
+
+prev_tb = tibble()
+po = list()
+
+for (i in seq(length(fct_lst))){
+  if (fct_lst[i] %in% c("inactive_mod","cog_imp","slow_gait","weak_strength")){
+    po[i] = "0"
+  }
+  else{
+    po[i] = "1"
+  }
+}
+
+for (i in seq(length(fct_lst))){
+  prev = as_tibble(svymean( ~eval(as.name(fct_lst[i])), data_sub_fall),
+                   rownames = "level") %>% 
+    filter(str_detect(level,as.character(po[i]))) %>% 
+    pull(mean)
+  
+  prev_se = as_tibble(svymean( ~eval(as.name(fct_lst[i])), data_sub_fall),
+                      rownames = "level") %>% 
+    filter(str_detect(level,as.character(po[i]))) %>% 
+    pull(SE)
+  
+  prev_tb = prev_tb %>% 
+    bind_rows(tibble(term=fct_lst[i],
+                     prev=prev,
+                     prev_se = prev_se,
+                     prev_ci_lower = prev - 2.24*prev_se,
+                     prev_ci_upper = prev + 2.24*prev_se))
+}
+
+
+prev_arr_tb = prev_tb %>% 
+  left_join(arr_tb, by = "term") %>% 
+  rename(arr = estimate) %>% 
+  mutate(miettinen_paf = get_miettinen_paf(prev,arr),
+         miettinen_paf_ci = get_paf_ci(prev_ci_lower,
+                                       prev_ci_upper,
+                                       arr_ci_lower,
+                                       arr_ci_upper))
+
+
+write_csv(prev_arr_tb,here::here("data", "output_data", "miettinen_paf_results_m2.csv"))
+
+
+# Alternative PAF calc ----
 # function to run paf calculations
 run_paf <- function(model, riskfactor, refval, data){
   PAF_calc_discrete(model=model, riskfactor=riskfactor,
@@ -502,8 +723,9 @@ paf_data = data_no_excl %>%
 ## Full, any fall----
 m2_full_incident <- glm(formula = incident_fall ~ 
                           fall_past_two +
+                          gender*fall_past_two +
                           low_vision + 
-                          poor_hearing +
+                          gender*poor_hearing +
                           diabetes + 
                           highbp + 
                           heart +
@@ -513,13 +735,13 @@ m2_full_incident <- glm(formula = incident_fall ~
                           pain +
                           subj_balance +
                           inactive_mod +
-                          pain_meds +
                           cog_imp +
-                          slow_gait +
-                          weak_strength +
-                          age + gender + schlyrs
+                          gender*slow_gait +
+                          weak_strength 
+                        + age + gender
+                        # + schlyrs
                         , 
-                        family = "poisson",
+                        family = "quasipoisson",
                         weights = mwgtr,
                         data = paf_data
 )
@@ -529,7 +751,11 @@ m2_full_incident_results <- broom::tidy(m2_full_incident) %>%
     refval = ifelse(estimate < 0, "Yes", "No")
   ) %>% 
   select(term, refval) %>% 
-  filter(!term %in% c("(Intercept)", "age", "genderMale", "schlyrs")) %>% 
+  filter(!term %in% c("(Intercept)", "age", "genderMale", 
+                      "fall_past_twoYes:genderMale",
+                      "genderMale:poor_hearingYes",
+                      "genderMale:slow_gaitYes"
+                      )) %>% 
   mutate(
     term = gsub('.{3}$', '', term)
   )
@@ -545,101 +771,103 @@ for (i in 1:length(m2_full_incident_results$term)){
 }
 
 ## No fall hx, any fall----
-paf_data_nohx = data_no_excl %>% 
-  filter(fall_past_two == 0) %>% 
-  mutate(across(where(is.factor), ~ recode(.x, "0" = "No", "1" = "Yes")))
-
-m2_nofallhx_incident  <- glm(formula = incident_fall ~ 
-                               low_vision + 
-                               poor_hearing +
-                               diabetes + 
-                               highbp + 
-                               heart +
-                               stroke +
-                               arthritis +
-                               depression + 
-                               pain +
-                               subj_balance +
-                               inactive_mod +
-                               pain_meds +
-                               cog_imp +
-                               slow_gait +
-                               weak_strength +
-                               age + gender + schlyrs
-                             , 
-                             family = "poisson",
-                             weights = mwgtr,
-                             data = paf_data_nohx
-)
-
-m2_nofallhx_incident_results <- broom::tidy(m2_nofallhx_incident) %>% 
-  mutate(
-    refval = ifelse(estimate < 0, "Yes", "No")
-  ) %>% 
-  select(term, refval) %>% 
-  filter(!term %in% c("(Intercept)", "age", "genderMale", "schlyrs")) %>% 
-  mutate(
-    term = gsub('.{3}$', '', term)
-  )
-
-for (i in 1:length(m2_nofallhx_incident_results$term)){
-  p <- run_paf(m2_nofallhx_incident, m2_nofallhx_incident_results$term[i], 
-               m2_nofallhx_incident_results$refval[i], paf_data_nohx)
-  result = data.frame(model ="m2_nofallhx_incident", riskfactor = m2_nofallhx_incident_results$term[i], 
-                      estimate = p$estimate, ci = p$confidence_interval,
-                      estimate_perc = p$estimate*100)
-  pafs <- rbind(pafs, result)
-  
-}
-
-## Injurious falls----
-paf_data_injfall = data_no_excl %>% 
-  filter(incident_fall == 1) %>% 
-  mutate(across(where(is.factor), ~ recode(.x, "0" = "No", "1" = "Yes")))
-
-m3_fallinj  <- glm(formula = incident_fall_injury ~
-                              fall_past_two + 
-                               low_vision + 
-                               poor_hearing +
-                               diabetes + 
-                               highbp + 
-                               heart +
-                               stroke +
-                               arthritis +
-                               depression + 
-                               pain +
-                               subj_balance +
-                               inactive_mod +
-                               pain_meds +
-                               cog_imp +
-                               slow_gait +
-                               weak_strength +
-                               age + gender + schlyrs
-                             , 
-                             family = "poisson",
-                             weights = mwgtr,
-                             data = paf_data_injfall
-)
-
-m3_fallinj_results <- broom::tidy(m3_fallinj) %>% 
-  mutate(
-    refval = ifelse(estimate < 0, "Yes", "No")
-  ) %>% 
-  select(term, refval) %>% 
-  filter(!term %in% c("(Intercept)", "age", "genderMale", "schlyrs")) %>% 
-  mutate(
-    term = gsub('.{3}$', '', term)
-  )
-
-for (i in 1:length(m3_fallinj_results$term)){
-  p <- run_paf(m3_fallinj, m3_fallinj_results$term[i], 
-               m3_fallinj_results$refval[i], paf_data_injfall)
-  result = data.frame(model ="m3_fallinj", riskfactor = m3_fallinj_results$term[i], 
-                      estimate = p$estimate, ci = p$confidence_interval,
-                      estimate_perc = p$estimate*100)
-  pafs <- rbind(pafs, result)
-  
-}
+# paf_data_nohx = data_no_excl %>% 
+#   filter(fall_past_two == 0) %>% 
+#   mutate(across(where(is.factor), ~ recode(.x, "0" = "No", "1" = "Yes")))
+# 
+# m2_nofallhx_incident  <- glm(formula = incident_fall ~ 
+#                                low_vision + 
+#                                poor_hearing +
+#                                diabetes + 
+#                                highbp + 
+#                                heart +
+#                                stroke +
+#                                arthritis +
+#                                depression + 
+#                                pain +
+#                                subj_balance +
+#                                inactive_mod +
+#                                # pain_meds +
+#                                cog_imp +
+#                                slow_gait +
+#                                weak_strength +
+#                                age + gender 
+#                              # + schlyrs
+#                              , 
+#                              family = "quasipoisson",
+#                              weights = mwgtr,
+#                              data = paf_data_nohx
+# )
+# 
+# m2_nofallhx_incident_results <- broom::tidy(m2_nofallhx_incident) %>% 
+#   mutate(
+#     refval = ifelse(estimate < 0, "Yes", "No")
+#   ) %>% 
+#   select(term, refval) %>% 
+#   filter(!term %in% c("(Intercept)", "age", "genderMale", "schlyrs")) %>% 
+#   mutate(
+#     term = gsub('.{3}$', '', term)
+#   )
+# 
+# for (i in 1:length(m2_nofallhx_incident_results$term)){
+#   p <- run_paf(m2_nofallhx_incident, m2_nofallhx_incident_results$term[i], 
+#                m2_nofallhx_incident_results$refval[i], paf_data_nohx)
+#   result = data.frame(model ="m2_nofallhx_incident", riskfactor = m2_nofallhx_incident_results$term[i], 
+#                       estimate = p$estimate, ci = p$confidence_interval,
+#                       estimate_perc = p$estimate*100)
+#   pafs <- rbind(pafs, result)
+#   
+# }
+# 
+# ## Injurious falls----
+# paf_data_injfall = data_no_excl %>% 
+#   filter(incident_fall == 1) %>% 
+#   mutate(across(where(is.factor), ~ recode(.x, "0" = "No", "1" = "Yes")))
+# 
+# m3_fallinj  <- glm(formula = incident_fall_injury ~
+#                               fall_past_two + 
+#                                low_vision + 
+#                                poor_hearing +
+#                                diabetes + 
+#                                highbp + 
+#                                heart +
+#                                stroke +
+#                                arthritis +
+#                                depression + 
+#                                pain +
+#                                subj_balance +
+#                                inactive_mod +
+#                                # pain_meds +
+#                                cog_imp +
+#                                slow_gait +
+#                                weak_strength +
+#                                age + gender 
+#                    # + schlyrs
+#                              , 
+#                              family = "quasipoisson",
+#                              weights = mwgtr,
+#                              data = paf_data_injfall
+# )
+# 
+# m3_fallinj_results <- broom::tidy(m3_fallinj) %>% 
+#   mutate(
+#     refval = ifelse(estimate < 0, "Yes", "No")
+#   ) %>% 
+#   select(term, refval) %>% 
+#   filter(!term %in% c("(Intercept)", "age", "genderMale", "schlyrs")) %>% 
+#   mutate(
+#     term = gsub('.{3}$', '', term)
+#   )
+# 
+# for (i in 1:length(m3_fallinj_results$term)){
+#   p <- run_paf(m3_fallinj, m3_fallinj_results$term[i], 
+#                m3_fallinj_results$refval[i], paf_data_injfall)
+#   result = data.frame(model ="m3_fallinj", riskfactor = m3_fallinj_results$term[i], 
+#                       estimate = p$estimate, ci = p$confidence_interval,
+#                       estimate_perc = p$estimate*100)
+#   pafs <- rbind(pafs, result)
+#   
+# }
 
 pafs 
 # write_csv(pafs, here::here("data", "output_data", "paf_results.csv"))
@@ -651,7 +879,9 @@ data_full_any <- paf_data %>%
   mutate(overall_risk = as.factor(case_when(
     fall_past_two == "Yes" | 
       heart == "Yes" | 
-      poor_hearing == "Yes" | 
+      arthritis == "Yes" |
+      pain == "Yes" | 
+      slow_gait == "No" |
       subj_balance == "Yes" 
     ~ 1,
     TRUE ~ 0
@@ -660,9 +890,10 @@ data_full_any <- paf_data %>%
 
 m3_full_incident <- glm(formula = incident_fall ~ 
                           overall_risk +
-                          age + gender + schlyrs
+                          age + gender 
+                        # + schlyrs
                         , 
-                        family = "poisson",
+                        family = "quasipoisson",
                         weights = mwgtr,
                         data = data_full_any
 )
@@ -678,73 +909,67 @@ tbl_regression(
 PAF_calc_discrete(model=m3_full_incident, riskfactor="overall_risk",
                   refval = 0, data = data_full_any,
                   ci = T,
-                  calculation_method = "D", weight_vec=data_full_any$mwgtr
+                  calculation_method = "D", weight_vec=data_full_any$mwgtr,
+                  boot_rep = 200
 )
 
 
 # No fall hx
-data_nohx_any <- paf_data_nohx %>% 
-  mutate(overall_risk = as.factor(case_when(
-    poor_hearing == "Yes" | 
-      stroke == "Yes"  
-    ~ 1,
-    TRUE ~ 0
-  ))
-  )
-
-m3_nofallhx_incident <- glm(formula = incident_fall ~ 
-                          overall_risk +
-                          age + gender + schlyrs
-                        , 
-                        family = "poisson",
-                        weights = mwgtr,
-                        data = data_nohx_any
-)
-
-tbl_regression(
-  m3_nofallhx_incident,
-  exponentiate = T,
-  conf.int = T,
-  # show_single_row = everything()
-) %>% 
-  modify_column_hide(column = c(std.error, p.value)) #  estimates are the same as above, CIs are different
-
-PAF_calc_discrete(model=m3_nofallhx_incident, riskfactor="overall_risk",
-                  refval = 0, data = data_nohx_any,
-                  ci = T,
-                  calculation_method = "D", weight_vec=data_nohx_any$mwgtr
-)
-
-# rfs <- rf_summary(
-#   rf_names = c("fall_past_two","low_vision", 
-#                                "poor_hearing",
-#                                "diabetes", 
-#                                "highbp", 
-#                                "heart",
-#                                "stroke",
-#                                "arthritis",
-#                                "depression", 
-#                                "pain",
-#                                "subj_balance",
-#                                "inactive_mod",
-#                                "pain_meds",
-#                                "cog_imp",
-#                                "slow_gait",
-#                                "weak_strength"),
-#   rf_prev = c(.35, .19, .21, .22, .65, .29, .069, .7, .092, 
-#               .36, .33, .32, .23, .12, .13, .14),
-#   risk = c(2.17, 1.07, 1.2, 1, 1.07, 1.16, 1.15, 1.16, 1.12, 
-#            1.11, 1.17, .99, 1.04, .94, .96, .99),
-#   log = T
+# data_nohx_any <- paf_data_nohx %>% 
+#   mutate(overall_risk = as.factor(case_when(
+#     poor_hearing == "Yes" | 
+#       stroke == "Yes"  |
+#       pain == "Yes"
+#     ~ 1,
+#     TRUE ~ 0
+#   ))
+#   )
+# 
+# m3_nofallhx_incident <- glm(formula = incident_fall ~ 
+#                           overall_risk +
+#                           age + gender 
+#                           # + schlyrs
+#                         , 
+#                         family = "quasipoisson",
+#                         weights = mwgtr,
+#                         data = data_nohx_any
 # )
+# 
+# tbl_regression(
+#   m3_nofallhx_incident,
+#   exponentiate = T,
+#   conf.int = T,
+#   # show_single_row = everything()
+# ) %>% 
+#   modify_column_hide(column = c(std.error, p.value)) #  estimates are the same as above, CIs are different
+# 
+# PAF_calc_discrete(model=m3_nofallhx_incident, riskfactor="overall_risk",
+#                   refval = 0, data = data_nohx_any,
+#                   ci = T,
+#                   calculation_method = "D", weight_vec=data_nohx_any$mwgtr,
+#                   boot_rep = 200
+# )
+# 
+# # rfs <- rf_summary(
+# #   rf_names = c("fall_past_two","low_vision", 
+# #                                "poor_hearing",
+# #                                "diabetes", 
+# #                                "highbp", 
+# #                                "heart",
+# #                                "stroke",
+# #                                "arthritis",
+# #                                "depression", 
+# #                                "pain",
+# #                                "subj_balance",
+# #                                "inactive_mod",
+# #                                "pain_meds",
+# #                                "cog_imp",
+# #                                "slow_gait",
+# #                                "weak_strength"),
+# #   rf_prev = c(.35, .19, .21, .22, .65, .29, .069, .7, .092, 
+# #               .36, .33, .32, .23, .12, .13, .14),
+# #   risk = c(2.17, 1.07, 1.2, 1, 1.07, 1.16, 1.15, 1.16, 1.12, 
+# #            1.11, 1.17, .99, 1.04, .94, .96, .99),
+# #   log = T
+# # )
 
-rfs <- rf_summary(
-  rf_names = c("fall_past_two",
-               "poor_hearing",
-               "heart",
-               "subj_balance"),
-  rf_prev = c(.35, .21, .29, .33),
-  risk = c(2.17, 1.2, 1.16, 1.17),
-  log = T
-)
-plot(rfs, type = "rn")
