@@ -6,24 +6,34 @@ library(tidyverse)
 library(gtsummary)
 library(survey)
 library(graphPAF)
+library(detectseparation)
+library(glm2)
 
 # Read data
 data_cat <- read_csv(here::here("data", "output_data", "falls_hrs_cat.csv")) %>% 
-  select(-schlyrs, -pain_meds)
+  select(-schlyrs, -subj_balance, 
+         -inactive_mod, -balance_sum,
+         -interview_type, -dementia_fu, -nurshm_2010)
 
 # Look at data
 skimr::skim(data_cat %>% 
               select(-id, -mwgtr))
+
+data_cat %>% 
+  filter(gait_speed_conv < 5) %>% 
+  ggplot(aes(x=gait_speed_conv)) +
+  geom_histogram()
 
 # Clean data ----
 
 # Numbers for exclusion sections
 older <- data_cat %>% 
   filter(age >= 65) %>% # only people 65+
-  filter(interview_type == 2) %>% # only ftf interviews
+  # filter(interview_type == 2) %>% # only ftf interviews
+  filter(eligible == 1) %>% # eligible for physical measures assessments, could be ineligible b/c nursing home or proxy interview,
+                            # or because they were assigned to enhanced ftf interview in 2012
   filter(!is.na(fall_past_two)) %>% # answered falls question baseline
-  filter(dementia == 0) %>% # without dementia
-  filter(nurshm_2010 == 5) # 5 = no, nursing home at baseline removed
+  filter(dementia == 0) # without dementia
 length(older$id)
 
 # number died at fu
@@ -67,7 +77,8 @@ older %>%
       dementia_2012 == 0 & # dementia at fu
       alive_2012 == 1 &  # dead at fu
       !is.na(incident_fall) & # missing fu fall info
-      gait_speed_conv > 2 # gait speeds > 200 cm/s 
+      (gait_speed_conv >= 1.5 | # gait speeds > 150 cm/s 
+      gait_speed_conv <=.1)
   ) %>% 
   summarize(n()) 
 
@@ -77,12 +88,28 @@ included_pts1 <- older %>%
     nurshm_2012 == 5 & # nursing home at fu 
       dementia_2012 == 0 & # dementia at fu
       alive_2012 == 1 &  # dead at fu
-      !is.na(incident_fall)   # missing fu fall info
+      !is.na(incident_fall) &  # missing fu fall info
+      eligible == 1  # eligible for physical measures
   ) 
 skimr::skim(included_pts1)
   
 included_pts1 <- included_pts1 %>% 
   pull(id) 
+
+# check to see which variables are missing data 
+missing <- older %>% 
+  filter(
+    nurshm_2012 == 5 & # nursing home at fu 
+      dementia_2012 == 0 & # dementia at fu
+      alive_2012 == 1 & # dead at fu
+      !is.na(incident_fall) &  # missing fu fall info
+      (gait_speed_conv < 1.5 &
+      gait_speed_conv > .1 |
+      is.na(gait_speed_conv))
+  ) %>% 
+  select(-incident_fall_number, -incident_fall_injury, -fall_number, -fall_injury)
+
+skimr::skim(missing)
 
 # inaccurate/missing gait times
 included_pts2 <- older %>% 
@@ -92,11 +119,28 @@ included_pts2 <- older %>%
       alive_2012 == 1 & # dead at fu
       !is.na(incident_fall) &  # missing fu fall info
       !is.na(gait_time_mean) &
-      gait_speed_conv <= 2
+      gait_speed_conv < 1.5 &
+      gait_speed_conv > .1
   ) %>% 
   pull(id)
 
 length(included_pts1) - length(included_pts2)
+
+# missing balance data
+included_pts3 <- older %>% 
+  filter(
+    nurshm_2012 == 5 & # nursing home at fu 
+      dementia_2012 == 0 & # dementia at fu
+      alive_2012 == 1 & # dead at fu
+      !is.na(incident_fall) &  # missing fu fall info
+      !is.na(gait_time_mean) &
+      gait_speed_conv < 1.5 &
+      gait_speed_conv > .1 &
+      !is.na(poor_balance)
+  ) %>% 
+  pull(id)
+
+length(included_pts2) - length(included_pts3)
 
 # remove those with missing data
 included_pts <- older %>% 
@@ -105,19 +149,21 @@ included_pts <- older %>%
       dementia_2012 == 0 & # dementia at fu
       alive_2012 == 1 & # dead at fu
       !is.na(incident_fall) &  # missing fu fall info
+      eligible == 1 & # eligible for physical measures
       !is.na(gait_time_mean) &
-      gait_speed_conv <= 2
+      gait_speed_conv < 1.5 &
+      gait_speed_conv > .1 &
+      !is.na(poor_balance)
   ) %>% 
   select(-fall_number, -fall_injury, -incident_fall_number, -incident_fall_injury) %>% 
   drop_na() %>% 
   pull(id)
 
-length(included_pts2) - length(included_pts)
+length(included_pts3) - length(included_pts)
 
 length(included_pts)
 
 # Create cuts for cognition, gait, and grip strength based on pts that will be included
-
 data_inc <- data_cat %>% 
   mutate(
     # new variable if pt should be excluded 
@@ -128,7 +174,8 @@ data_inc <- data_cat %>%
   )
 
 # Create survey design
-design_cuts <- svydesign(id =~ id, weights =~ mwgtr, data = data_inc)
+design_cuts <- svydesign(id =~ id, strata =~ stratum, 
+                         weights =~ mwgtr, data = data_inc)
 
 # Subset based on exclusion criteria
 data_sub_cuts <- subset(design_cuts, included == 1)
@@ -160,7 +207,7 @@ grip_cuts <- grip_cuts_mean %>%
 # Clean up data
 data_clean <- data_cat %>%
   # only relevant columns
-  select(id, mwgtr, age, age_group, gender, #schlyrs, 
+  select(id, mwgtr, stratum, age, age_group, gender, #schlyrs, 
          incident_fall,
          incident_fall_number, 
          incident_fall_injury,
@@ -174,9 +221,10 @@ data_clean <- data_cat %>%
          arthritis,
          depression,
          pain,
-         subj_balance,
-         inactive_mod,
-         # pain_meds,
+         # subj_balance,
+         poor_balance,
+         # inactive_mod, 
+         inactive_vig,
          tot_cog, gait_speed_conv, grip_strength, 
   ) %>% 
   # add cognition, gait, and grip cuts to main df
@@ -206,7 +254,8 @@ data_clean <- data_cat %>%
 # Make relevant variables factors
 data_clean_factor <- data_clean %>% 
   mutate(across(
-    c(fall_past_two,
+    c(
+      fall_past_two,
       low_vision,
       poor_hearing,
       cog_imp,
@@ -219,11 +268,12 @@ data_clean_factor <- data_clean %>%
       depression,
       pain,
       weak_strength,
-      subj_balance,
-      inactive_mod,
-      # pain_meds,
+      # subj_balance,
+      # inactive_mod, 
+      inactive_vig,
+      poor_balance
     ), 
-    factor)
+    factor) 
   ) %>% 
   mutate(
     incident_fall_injury = case_when(
@@ -245,7 +295,8 @@ data_clean_factor <- data_clean %>%
   )))
 
 # Create survey design
-design <- svydesign(id =~ id, weights =~ mwgtr, data = data_clean_factor)
+design <- svydesign(id =~ id, weights =~ mwgtr, strata =~ stratum,
+                    data = data_clean_factor)
 
 # Subset based on exclusion criteria
 data_sub <- subset(design, included == 1)
@@ -259,7 +310,7 @@ data_no_excl <- data_clean_factor %>%
 tbl_unwt <- tbl_summary(
   data = data_no_excl %>% mutate(across(where(is.factor), ~ recode(.x, "0" = "No", "1" = "Yes"))),
   by = incident_fall, 
-  include = c(-id, -mwgtr, -age_group, -slow_gait_cut, -mean_gait, 
+  include = c(-id, -mwgtr, -stratum, -age_group, -slow_gait_cut, -mean_gait, 
               -incident_fall_number,
               -sd_gait, -mean_grip, -sd_grip, -weak_grip_cut, -included),
   statistic = list(all_continuous() ~ "{mean} ({sd})",
@@ -287,7 +338,7 @@ tbl_unwt <- tbl_summary(
     low_vision = "Poor vision",
     poor_hearing = "Poor hearing",
     pain = "Pain",
-    subj_balance = "Subjective poor balance",
+    # subj_balance = "Subjective poor balance",
     inactive_mod = "Physical inactivity"
   )
   ) %>% 
@@ -307,7 +358,7 @@ data_no_excl_nohx <- data_no_excl %>%
 tbl_unwt_nohx <- tbl_summary(
   data = data_no_excl_nohx %>% mutate(across(where(is.factor), ~ recode(.x, "0" = "No", "1" = "Yes"))),
   by = incident_fall, 
-  include = c(-id, -mwgtr, -age_group, -slow_gait_cut, -mean_gait, 
+  include = c(-id, -mwgtr, -stratum, -age_group, -slow_gait_cut, -mean_gait, 
               -sd_gait, -mean_grip, -sd_grip, -weak_grip_cut, -included),
   statistic = list(all_continuous() ~ "{mean} ({sd})",
                    all_categorical() ~ "{n} ({p}%)"
@@ -324,7 +375,7 @@ tbl_unwt_nohx
 tbl_wt <- tbl_svysummary(
   data_sub, 
   by = incident_fall, 
-  include = c(-id, -mwgtr, -age_group, -slow_gait_cut, -mean_gait, 
+  include = c(-id, -mwgtr, -stratum, -age_group, -slow_gait_cut, -mean_gait, 
               -sd_gait, -mean_grip, -sd_grip, -weak_grip_cut, -included),
   statistic = list(all_continuous() ~ "{mean} ({sd})",
                    all_categorical() ~ "{p}%"),
@@ -353,7 +404,7 @@ tbl_wt <- tbl_svysummary(
     low_vision = "Poor vision",
     poor_hearing = "Poor hearing",
     pain = "Pain",
-    subj_balance = "Subjective poor balance",
+    # subj_balance = "Subjective poor balance",
     inactive_mod = "Physical inactivity"
   )
 ) %>% 
@@ -366,15 +417,69 @@ tbl_wt
 
 # export to Excel
 # tbl_wt %>%
-  # as_hux_xlsx( here::here("data", "output_data", "demo_table_weighted.xlsx"))
+# as_hux_xlsx( here::here("data", "output_data", "demo_table_weighted.xlsx"))
+
+
+# Weighted demographics by gender
+tbl_wt_gender <- tbl_svysummary(
+  data_sub, 
+  by = gender, 
+  include = c(-id, -mwgtr, -stratum, -age_group, -slow_gait_cut, -mean_gait, 
+              -sd_gait, -mean_grip, -sd_grip, -weak_grip_cut, -included),
+  statistic = list(all_continuous() ~ "{mean} ({sd})",
+                   all_categorical() ~ "{p}%"),
+  digits = list(
+    all_continuous() ~ 1,
+    gait_speed_conv ~ 3
+  ),
+  label = list(
+    age = "Age, years, Mean (SD)",
+    # gender = "Women, %", 
+    incident_fall_injury = "Injurious incident fall, %",
+    multi_falls = "Mulitiple incident falls, %",
+    cog_tot = "A-TICS, range 0-35, Mean (SD)",
+    gait_speed_conv = "Gait velocity, m/s, Mean (SD)",
+    grip_strength = "Grip strength, kg, Mean (SD)",
+    fall_past_two = "Previous fall history",
+    highbp = "Hypertension",
+    diabetes = "Diabetes",
+    heart = "Heart condition",
+    stroke = "Stroke",
+    arthritis = "Arthritis",
+    depression = "Depression",
+    cog_imp = "Cognitive impairment",
+    slow_gait = "Slow gait",
+    weak_strength = "Muscle weakness",
+    low_vision = "Poor vision",
+    poor_hearing = "Poor hearing",
+    pain = "Pain",
+    # subj_balance = "Subjective poor balance",
+    inactive_mod = "Physical inactivity"
+  )
+) %>% 
+  add_overall() %>% 
+  add_p(test = list(all_continuous() ~ "svy.t.test"),
+        pvalue_fun = function(x) style_pvalue(x, digits = 2)) %>% 
+  add_significance_stars() 
+
+tbl_wt_gender
+
+# export to Excel
+# tbl_wt_gender %>%
+  # as_hux_xlsx( here::here("data", "output_data", "demo_table_weighted_gender.xlsx"))
 
 # Correlations ----
 # Correlations between risk factors
-design2 <- svydesign(id =~ id, weights =~ mwgtr, data = data_clean %>% 
-                       select(id, mwgtr, included, fall_past_two, low_vision, poor_hearing, diabetes, highbp, 
-                              heart, stroke, arthritis, depression, pain, subj_balance, 
-                              inactive_mod, 
-                              # pain_meds, 
+design2 <- svydesign(id =~ id, weights =~ mwgtr, strata =~ stratum,
+                     data = data_clean %>% 
+                       select(id, mwgtr, stratum, included, 
+                              age, gender, 
+                              fall_past_two, low_vision, poor_hearing, diabetes, highbp, 
+                              heart, stroke, arthritis, depression, pain, 
+                              # subj_balance, 
+                              # inactive_mod, 
+                              inactive_vig, 
+                              poor_balance, 
                               cog_imp, slow_gait, weak_strength) %>% 
                        mutate_if(is.factor, as.numeric)
                      )
@@ -384,10 +489,15 @@ data_sub2 <- subset(design2, included == 1)
 
 data_cor <- as.matrix(data_clean %>% 
                         filter(included == 1) %>% 
-                        select(fall_past_two, low_vision, poor_hearing, diabetes, highbp, 
-                               heart, stroke, arthritis, depression, pain, subj_balance, 
-                               inactive_mod, 
-                               # pain_meds, 
+                        select(
+                               age, gender,
+                               fall_past_two, 
+                               low_vision, poor_hearing, diabetes, highbp, 
+                               heart, stroke, arthritis, depression, pain, 
+                               # subj_balance, 
+                               # inactive_mod, 
+                               inactive_vig,
+                               poor_balance, 
                                cog_imp, slow_gait, weak_strength) %>% 
                         mutate_if(is.factor, as.numeric)
 ) 
@@ -407,28 +517,81 @@ corrplot::corrplot(cov2cor(as.matrix(v)),
 # Modeling ----
 ## Model 1 ----
 
+### Interactions ----
 # Full sample (of those who did gait assessment)
-m_full_incident <- svyglm(incident_fall ~ 
+m_full_incident_interaction <- svyglm(incident_fall ~ 
                             gender*fall_past_two +
-                            low_vision + 
+                            gender*low_vision + 
                             gender*poor_hearing +
-                            diabetes + 
-                            highbp + 
-                            heart +
-                            stroke +
-                            arthritis +
-                            depression + 
-                            pain +
-                            subj_balance +
-                            inactive_mod +
-                            cog_imp +
+                            gender*diabetes + 
+                            gender*highbp + 
+                            gender*heart +
+                            gender*stroke +
+                            gender*arthritis +
+                            gender*depression + 
+                            gender*pain +
+                            gender*poor_balance +
+                            gender*inactive_vig +
+                            gender*cog_imp +
                             gender*slow_gait +
-                            weak_strength 
+                            gender*weak_strength +
+                            age*fall_past_two +
+                            age*low_vision + 
+                            age*poor_hearing +
+                            age*diabetes + 
+                            age*highbp + 
+                            age*heart +
+                            age*stroke +
+                            age*arthritis +
+                            age*depression + 
+                            age*pain +
+                            age*poor_balance +
+                            age*inactive_vig +
+                            age*cog_imp +
+                            age*slow_gait +
+                            age*weak_strength +
                              + age + gender 
                           # + schlyrs
                           , 
-                          family = quasipoisson(),
+                          # family = quasipoisson(),
+                          family = quasibinomial(),
                           design = data_sub)
+
+tbl_results_1_interaction <- tbl_regression(
+  m_full_incident_interaction,
+  exponentiate = T,
+  conf.int = T,
+  estimate_fun = function(x) style_number(x, digits = 2),
+  show_single_row = everything() # can comment out to see full model, easier to read with only 1 row
+) %>% 
+  add_significance_stars() %>% 
+  modify_column_hide(column = std.error) %>%
+  modify_column_unhide(column = conf.low) 
+
+tbl_results_1_interaction
+
+### Model ----
+m_full_incident <- svyglm(incident_fall ~ 
+                                        gender*fall_past_two +
+                                        low_vision + 
+                                        gender*poor_hearing +
+                                        diabetes + 
+                                        highbp + 
+                                        heart +
+                                        stroke +
+                                        arthritis +
+                                        depression + 
+                                        pain +
+                                        poor_balance +
+                                        gender*inactive_vig +
+                                        cog_imp +
+                                        gender*slow_gait +
+                                        weak_strength +
+                                        + age + gender 
+                                      , 
+                                      # family = quasipoisson(),
+                                      family = quasibinomial(),
+                                      design = data_sub)
 
 tbl_results_1 <- tbl_regression(
   m_full_incident,
@@ -439,97 +602,174 @@ tbl_results_1 <- tbl_regression(
 ) %>% 
   add_significance_stars() %>% 
   modify_column_hide(column = std.error) %>%
-  modify_column_unhide(column = ci) 
+  modify_column_unhide(column = conf.low) 
 
 tbl_results_1
 
+summary(m_full_incident)
 # export to Excel
 # tbl_results_1 %>%
   # as_hux_xlsx( here::here("data", "output_data", "tbl_results_1.xlsx"))
 
-## Model 2 ----
-data_sub_no_hx <- subset(design, included == 1 & fall_past_two == 0) # correct?
+### Gender-stratified ----
+data_sub_male <- subset(design, included == 1 & gender == "Male")
+m_full_male <- svyglm(incident_fall ~ 
+                            fall_past_two +
+                            low_vision + 
+                            poor_hearing +
+                            diabetes + 
+                            highbp + 
+                            heart +
+                            stroke +
+                            arthritis +
+                            depression + 
+                            pain +
+                            poor_balance +
+                            inactive_vig +
+                            cog_imp +
+                            slow_gait +
+                            weak_strength +
+                            + age 
+                          , 
+                          # family = quasipoisson(),
+                          family = quasibinomial(),
+                          design = data_sub_male)
 
-# Only those without prior fall history
-m_nofallhx_incident <- svyglm(incident_fall ~ 
-                                low_vision + 
-                                gender*poor_hearing +
-                                diabetes + 
-                                highbp + 
-                                heart +
-                                stroke +
-                                arthritis +
-                                depression + 
-                                pain +
-                                subj_balance +
-                                inactive_mod +
-                                # pain_meds +
-                                cog_imp +
-                                slow_gait +
-                                weak_strength +
-                                age + gender 
-                              # + schlyrs
-                              , 
-                              family = quasipoisson(),
-                              design = data_sub_no_hx)
-
-tbl_results_2 <- tbl_regression(
-  m_nofallhx_incident,
+tbl_results_male <- tbl_regression(
+  m_full_male,
   exponentiate = T,
   conf.int = T,
   estimate_fun = function(x) style_number(x, digits = 2),
-  show_single_row = everything()
+  show_single_row = everything() # can comment out to see full model, easier to read with only 1 row
 ) %>% 
   add_significance_stars() %>% 
   modify_column_hide(column = std.error) %>%
-  modify_column_unhide(column = ci)
+  modify_column_unhide(column = conf.low) 
 
-tbl_results_2
+tbl_results_male
+
+summary(m_full_male)
+
+data_sub_female <- subset(design, included == 1 & gender == "Female")
+m_full_female <- svyglm(incident_fall ~ 
+                        fall_past_two +
+                        low_vision + 
+                        poor_hearing +
+                        diabetes + 
+                        highbp + 
+                        heart +
+                        stroke +
+                        arthritis +
+                        depression + 
+                        pain +
+                        poor_balance +
+                        inactive_vig +
+                        cog_imp +
+                        slow_gait +
+                        weak_strength +
+                        + age 
+                      , 
+                      # family = quasipoisson(),
+                      family = quasibinomial(),
+                      design = data_sub_female)
+
+tbl_results_female <- tbl_regression(
+  m_full_female,
+  exponentiate = T,
+  conf.int = T,
+  estimate_fun = function(x) style_number(x, digits = 2),
+  show_single_row = everything() # can comment out to see full model, easier to read with only 1 row
+) %>% 
+  add_significance_stars() %>% 
+  modify_column_hide(column = std.error) %>%
+  modify_column_unhide(column = conf.low) 
+
+tbl_results_female
+
+summary(m_full_female)
+
+## Model 2 ----
+# data_sub_no_hx <- subset(design, included == 1 & fall_past_two == 0) # correct?
+
+# Only those without prior fall history
+# m_nofallhx_incident <- svyglm(incident_fall ~ 
+#                                 low_vision + 
+#                                 gender*poor_hearing +
+#                                 diabetes + 
+#                                 highbp + 
+#                                 heart +
+#                                 stroke +
+#                                 arthritis +
+#                                 depression + 
+#                                 pain +
+#                                 # subj_balance +
+#                                 poor_balance +
+#                                 inactive_vig +
+#                                 cog_imp +
+#                                 slow_gait +
+#                                 weak_strength +
+#                                 age + gender 
+#                               , 
+#                               family = quasipoisson(),
+#                               design = data_sub_no_hx)
+# 
+# tbl_results_2 <- tbl_regression(
+#   m_nofallhx_incident,
+#   exponentiate = T,
+#   conf.int = T,
+#   estimate_fun = function(x) style_number(x, digits = 2),
+#   show_single_row = everything()
+# ) %>% 
+#   add_significance_stars() %>% 
+#   modify_column_hide(column = std.error) %>%
+#   modify_column_unhide(column = ci)
+# 
+# tbl_results_2
 
 # export to Excel
 # tbl_results_2 %>%
   # as_hux_xlsx( here::here("data", "output_data", "tbl_results_2.xlsx"))
 
 ## Model 3 ----
-data_sub_inj <- subset(design, included == 1 & 
-                         incident_fall == 1) # correct?
+# data_sub_inj <- subset(design, included == 1 & 
+                         # incident_fall == 1) # correct?
 
 # Only those without prior fall history
-m_fallinj <- svyglm(incident_fall_injury ~ 
-                                fall_past_two +
-                                low_vision + 
-                                poor_hearing +
-                                diabetes + 
-                                highbp + 
-                                heart +
-                                stroke +
-                                arthritis +
-                                depression + 
-                                pain +
-                                subj_balance +
-                                inactive_mod +
-                                # pain_meds +
-                                cog_imp +
-                                slow_gait +
-                                weak_strength +
-                                age + gender 
-                    # + schlyrs
-                              , 
-                              family = quasipoisson(),
-                              design = data_sub_inj)
-
-tbl_results_3 <- tbl_regression(
-  m_fallinj,
-  exponentiate = T,
-  conf.int = T,
-  estimate_fun = function(x) style_number(x, digits = 2),
-  show_single_row = everything()
-) %>% 
-  add_significance_stars() %>% 
-  modify_column_hide(column = std.error) %>%
-  modify_column_unhide(column = ci)
-
-tbl_results_3
+# m_fallinj <- svyglm(incident_fall_injury ~ 
+#                                 fall_past_two +
+#                                 low_vision + 
+#                                 poor_hearing +
+#                                 diabetes + 
+#                                 highbp + 
+#                                 heart +
+#                                 stroke +
+#                                 arthritis +
+#                                 depression + 
+#                                 pain +
+#                                 poor_balance +
+#                                 inactive_vig +
+#                                 # pain_meds +
+#                                 cog_imp +
+#                                 slow_gait +
+#                                 weak_strength +
+#                                 age + gender 
+#                     # + schlyrs
+#                               , 
+#                               family = quasipoisson(),
+#                               design = data_sub_inj)
+# 
+# tbl_results_3 <- tbl_regression(
+#   m_fallinj,
+#   exponentiate = T,
+#   conf.int = T,
+#   estimate_fun = function(x) style_number(x, digits = 2),
+#   show_single_row = everything()
+# ) %>% 
+#   add_significance_stars() %>% 
+#   modify_column_hide(column = std.error) %>%
+#   modify_column_unhide(column = ci)
+# 
+# tbl_results_3
 
 # export to Excel
 # tbl_results_2 %>%
@@ -704,6 +944,7 @@ write_csv(prev_arr_tb,here::here("data", "output_data", "miettinen_paf_results_m
 
 # Alternative PAF calc ----
 # function to run paf calculations
+
 run_paf <- function(model, riskfactor, refval, data){
   PAF_calc_discrete(model=model, riskfactor=riskfactor,
                     refval = refval, data = data,
@@ -721,7 +962,7 @@ paf_data = data_no_excl %>%
   mutate(across(where(is.factor), ~ recode(.x, "0" = "No", "1" = "Yes")))
 
 ## Full, any fall----
-m2_full_incident <- glm(formula = incident_fall ~ 
+m2_full_incident <- glm2(formula = incident_fall ~ 
                           fall_past_two +
                           gender*fall_past_two +
                           low_vision + 
@@ -733,15 +974,15 @@ m2_full_incident <- glm(formula = incident_fall ~
                           arthritis +
                           depression + 
                           pain +
-                          subj_balance +
-                          inactive_mod +
+                          poor_balance + 
+                          gender*inactive_vig +
                           cog_imp +
                           gender*slow_gait +
                           weak_strength 
                         + age + gender
-                        # + schlyrs
                         , 
-                        family = "quasipoisson",
+                        # famil = quasipoisson(),
+                        family = quasibinomial(),
                         weights = mwgtr,
                         data = paf_data
 )
@@ -754,12 +995,38 @@ m2_full_incident_results <- broom::tidy(m2_full_incident) %>%
   filter(!term %in% c("(Intercept)", "age", "genderMale", 
                       "fall_past_twoYes:genderMale",
                       "genderMale:poor_hearingYes",
+                      "genderMale:inactive_vigYes",
                       "genderMale:slow_gaitYes"
                       )) %>% 
   mutate(
     term = gsub('.{3}$', '', term)
   )
 
+m_sep <- glm2(formula = incident_fall ~ 
+               fall_past_two +
+               gender*fall_past_two +
+               low_vision + 
+               gender*poor_hearing +
+               diabetes + 
+               highbp + 
+               heart +
+               stroke +
+               arthritis +
+               depression + 
+               pain +
+               poor_balance + 
+               gender*inactive_vig +
+               cog_imp +
+               gender*slow_gait +
+               weak_strength 
+             + age + gender
+             , 
+             family = "quasibinomial",
+             method = "detect_separation",
+             weights = mwgtr,
+             data = paf_data
+)
+m_sep
 
 for (i in 1:length(m2_full_incident_results$term)){
   p <- run_paf(m2_full_incident, m2_full_incident_results$term[i], m2_full_incident_results$refval[i], paf_data)
@@ -819,7 +1086,7 @@ for (i in 1:length(m2_full_incident_results$term)){
 #   
 # }
 # 
-# ## Injurious falls----
+ ## Injurious falls----
 # paf_data_injfall = data_no_excl %>% 
 #   filter(incident_fall == 1) %>% 
 #   mutate(across(where(is.factor), ~ recode(.x, "0" = "No", "1" = "Yes")))
@@ -875,14 +1142,14 @@ pafs
 ## Overall PAF----
 
 # Full data
+# only main effect significant
 data_full_any <- paf_data %>% 
   mutate(overall_risk = as.factor(case_when(
     fall_past_two == "Yes" | 
       heart == "Yes" | 
       arthritis == "Yes" |
       pain == "Yes" | 
-      slow_gait == "No" |
-      subj_balance == "Yes" 
+      poor_balance == "Yes"
     ~ 1,
     TRUE ~ 0
   ))
@@ -891,7 +1158,6 @@ data_full_any <- paf_data %>%
 m3_full_incident <- glm(formula = incident_fall ~ 
                           overall_risk +
                           age + gender 
-                        # + schlyrs
                         , 
                         family = "quasipoisson",
                         weights = mwgtr,
@@ -913,6 +1179,44 @@ PAF_calc_discrete(model=m3_full_incident, riskfactor="overall_risk",
                   boot_rep = 200
 )
 
+# with interation effect
+data_full_any_int <- paf_data %>% 
+  mutate(overall_risk = as.factor(case_when(
+    fall_past_two == "Yes" | 
+      heart == "Yes" | 
+      arthritis == "Yes" |
+      pain == "Yes" | 
+      poor_balance == "Yes" |
+      poor_hearing == "Yes" |
+      inactive_vig == "No" # ? b/c main effect < 1
+    ~ 1,
+    TRUE ~ 0
+  ))
+  )
+
+m4_full_incident <- glm(formula = incident_fall ~ 
+                          overall_risk +
+                          age + gender 
+                        , 
+                        family = "quasipoisson",
+                        weights = mwgtr,
+                        data = data_full_any_int
+)
+
+tbl_regression(
+  m4_full_incident,
+  exponentiate = T,
+  conf.int = T,
+  # show_single_row = everything()
+) %>% 
+  modify_column_hide(column = c(std.error, p.value)) #  estimates are the same as above, CIs are different
+
+PAF_calc_discrete(model=m4_full_incident, riskfactor="overall_risk",
+                  refval = 0, data = data_full_any,
+                  ci = T,
+                  calculation_method = "D", weight_vec=data_full_any$mwgtr,
+                  boot_rep = 200
+)
 
 # No fall hx
 # data_nohx_any <- paf_data_nohx %>% 
