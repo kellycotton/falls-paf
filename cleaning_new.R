@@ -16,7 +16,7 @@ data_track <- haven::read_sav(here::here("data", "hrs", "track.sav")) %>% janito
          mage, mnurshm, # 2010 age, nursing home status
          nalive, nnurshm, # 2012 status, nursing home status
          mwgtr, # survey weights
-         
+         stratum # strata
   ) %>% 
   mutate(hhidpn = as.numeric(paste0(hhid, pn)))
 data_harm <- haven::read_sav(here::here("data", "hrs", "harmonized_data.sav")) %>% janitor::clean_names(.) 
@@ -26,12 +26,22 @@ data_harm_clean <- data_harm %>%
   select(hhidpn, 
          r10gripsum, #grip strength
          r10rxpain, # meds: pain
+         r10balance, #balance test summary score
+         
   ) %>% 
   rename(
     id = hhidpn,
     grip_strength = r10gripsum, 
     pain_meds = r10rxpain,
-  ) 
+    balance_sum = r10balance, 
+  ) %>% 
+  mutate(
+    poor_balance = case_when(
+      balance_sum < 3 ~ 1,
+      balance_sum >= 3 ~ 0,
+      TRUE ~ balance_sum
+    )
+  )
 
 # follow-up data
 data_2012_clean <- data_2012 %>% 
@@ -92,20 +102,24 @@ data_combo <- data_2010 %>%
   #select relevant baseline variables
   select(
     hhidpn, ma028, mc272, mc273, # id, nursing home, AD, dementia
-    mi800, # interview type
+    mi800, mpmelig, # interview type, eligibility for physical assessments
     gender, schlyrs, race, 
     mage, mnurshm, # 2010 age, nursing home status
     nalive, nnurshm, # 2012 status, nursing home status
-    mwgtr, # survey weights
+    mwgtr, stratum, # survey weights, stratum
     ma019, mx060_r, mz216,  # age, sex, educ
     mc079, mc080, mc081, # fall past 2, fall number, fall injury
     mc095, mc103, # self-rated vision, self-rated hearing
     mc005, mc010, mc036, mc053, mc070, # high BP, diabetes, heart condition, stroke, arthritis, 
     mc104, #troubled with pain
     mi823, mi824, # walking test time in seconds
+    mi820, mi821m1, # walking test complete, reason why not
+    mi883, contains("mi884"), mi886, mi887, mi888, #side by side stand
+    mi876, contains("mi877"), mi879, mi880, mi881, # semitandem stand
+    mi893, contains("mi894"), mi896, mi897, mi898, # full tandem stand
     md110, md111, md112, md113, md114, md115, md116, md117, # ces-d questions
     mg210, # subjective balance
-    mc224, # moderate activity
+    mc223, mc224, # vigorous, moderate activity
     r10cogtot, # total cog
   ) %>%
   # score CES-D scale
@@ -157,6 +171,7 @@ data_combo <- data_2010 %>%
   #rename columns
   rename(
     id = hhidpn,
+    eligible = mpmelig,
     sex_1 = mx060_r,
     age = mage, 
     nurshm_2010 = mnurshm, # nursing home status
@@ -180,7 +195,32 @@ data_combo <- data_2010 %>%
     gait_2 = mi824,
     subj_balance = mg210,
     mod_act = mc224,
+    vig_act = mc223,
     tot_cog = r10cogtot,
+    sbs_complete = mi883,
+    semi_complete = mi876,
+    full_complete = mi893,
+    sbs_no_why1 = mi884m1,
+    sbs_no_why2 = mi884m2,
+    sbs_no_why3 = mi884m3,
+    sbs_no_why4 = mi884m4,
+    sbs_no_why5 = mi884m5,
+    semi_no_why1 = mi877m1,
+    semi_no_why2 = mi877m2, 
+    semi_no_why3 = mi877m3, 
+    semi_no_why4 = mi877m4, 
+    semi_no_why5 = mi877m5, 
+    full_no_why1 = mi894m1,
+    full_no_why2 = mi894m2,
+    full_no_why3 = mi894m3,
+    full_no_why4 = mi894m4,
+    full_no_why5 = mi894m5,
+    sbs_time_full = mi886,
+    sbs_time = mi887,
+    semi_time_full = mi879,
+    semi_time = mi880,
+    full_time_full = mi896,
+    full_time = mi897
   ) %>%
   mutate(
     sex = case_when(
@@ -284,6 +324,16 @@ data_combo <- data_2010 %>%
       subj_balance == 9 ~ NA,
       TRUE ~ subj_balance,
     ),
+    inactive_vig = case_when(
+      vig_act == 1 ~ 0,
+      vig_act == 2 ~ 0,
+      vig_act == 7 ~ 0,
+      vig_act == 3 ~ 1,
+      vig_act == 4 ~ 1,
+      vig_act == 8 ~ NA,
+      vig_act == 9 ~ NA,
+      TRUE ~ vig_act,
+    ),
     inactive_mod = case_when(
       mod_act == 1 ~ 0,
       mod_act == 2 ~ 0,
@@ -307,20 +357,30 @@ data_combo <- data_2010 %>%
       age >= 80 ~ "80+",
       age >= 70 & age < 80 ~ "70-79",
       is.na(age) ~ NA
-    )
+    ),
   ) %>% 
   mutate(
     gait_time_mean = (gait_1+gait_2)/2,
     gait_speed_conv = 2.5019/gait_time_mean
   ) %>% 
   left_join(., data_2012_clean) %>% 
-  left_join(., data_harm_clean) 
+  left_join(., data_harm_clean) %>% 
+  mutate(
+    poor_balance = case_when(
+      balance_sum < 3 ~ 1,
+      balance_sum >= 3 ~ 0,
+      sbs_complete == 5 & sbs_no_why1 %in% c(1, 2, 4) ~ 1,
+      semi_complete == 5 & semi_no_why1 %in% c(1, 2, 4) ~ 1,
+      full_complete == 5 & full_no_why1 %in% c(1, 2, 4) ~ 1,
+      TRUE ~ balance_sum
+    )
+  ) 
 
 data_cat <- data_combo %>% 
   select(id, alz_dis, dementia, age, gender, schlyrs, race, age_group,
-         nurshm_2010, interview_type,
+         nurshm_2010, interview_type, eligible,
          nurshm_2012, alive_2012, dementia_2012, dementia_fu, alz_dis_fu,
-         mwgtr, 
+         mwgtr, stratum,
          fall_past_two, fall_number, fall_injury, 
          vision, hearing, 
          highbp, diabetes, heart, stroke, arthritis, 
@@ -330,9 +390,10 @@ data_cat <- data_combo %>%
          gait_speed_conv, gait_time_mean, 
          incident_fall, incident_fall_number, incident_fall_injury,
          subj_balance,
-         inactive_mod,
+         balance_sum,
+         inactive_vig, inactive_mod,
          grip_strength, 
-         pain_meds,
+         poor_balance
   ) %>% 
   mutate(
     dementia = case_when(
@@ -356,6 +417,7 @@ data_cat <- data_combo %>%
       TRUE ~ hearing 
     ),
   ) 
+
 
 # write_csv(data_combo, here::here("data", "output_data", "falls_hrs_full.csv"))
 write_csv(data_cat, here::here("data", "output_data", "falls_hrs_cat.csv"))
